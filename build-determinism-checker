@@ -1,0 +1,80 @@
+#!/bin/bash
+
+###############################################
+### Testing for path based non-determinism 
+### in Go builds
+###############################################
+
+function assert_directory_not_exists {
+  local -r dir="$1"
+	if [ -d "$dir" ]; then
+		>&2 echo "$dir already exists. Exiting."
+		exit
+	fi
+}
+
+function safe_make_directory {
+  local -r dir="$1"
+  assert_directory_not_exists "$dir"
+  echo "making directory: $dir"
+  mkdir "$dir"
+}
+
+function copy_src_file {
+	local -r filename="$1" 	# relative path from script working dir
+	local -r dir="$2" # relative path from script working dir
+  echo "copying $filename to $dir/$filename."
+	cp "$filename" "$dir/$filename"
+}	
+
+# note.. as written should only be used with sub-directories and relative path
+# of the script work dir
+function build_binaries {
+  local -r src="$1"
+  local -r mod_stat="$2"
+  echo "compiling in $(pwd) with trimpath."
+  go tool compile -trimpath $(pwd) -o "1compile.o.$mod_stat" "$src" 
+  echo "linking in $(pwd)."
+  go tool link -o "2link.$mod_stat" "1compile.o.$mod_stat" 
+  echo "building in $(pwd) with trimpath - no explicit (i.e. -o) out."
+  go build -trimpath "$src"
+  echo "renaming build out file."
+  noext=${src%.*}
+  mv "$noext" "no.explicit.out.$mod_stat" # gotta rename it cuz no -o switch
+  echo "building with -o switch"
+  go build -trimpath -o "explicit.out.$mod_stat" "$src" 
+  echo "building with -trimpath... no file specified."
+  go build -trimpath
+  if [ -f x ]; then
+     mv x "no.file.specified.$mod_stat"
+  else
+    mv "$dir" "no.file.specified.$mod_stat"
+  fi
+}
+
+function run_builds_in_dir {
+  local -r dir="$1"
+  safe_make_directory "$dir"
+  copy_src_file main.go "$dir"
+  # sub shell
+  pushd $dir
+  echo "pushd: now in $(pwd)"
+  echo "building binaries without MOD in $dir."
+  build_binaries main.go NO_mod 
+  echo "adding go.mod in $dir."
+  go mod init example.com/x 
+  echo "building binaries with MOD in $dir."
+  build_binaries main.go WITH_mod
+  popd 
+}
+
+function main {
+  run_builds_in_dir td1
+  run_builds_in_dir td2
+  echo "shas in td1..."
+  shasum td1/*
+  echo "shas in td2..."
+  shasum td2/*
+}
+
+main
